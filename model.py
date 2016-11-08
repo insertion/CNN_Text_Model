@@ -17,6 +17,38 @@ def dropout(input,dropout_rate):
                            )
     return corrupted_matrix*input
 
+def sgd_updates_adadelta(params,cost,rho=0.95,epsilon=1e-6,norm_lim=9):
+    """
+    adadelta update rule, mostly from
+    https://groups.google.com/forum/#!topic/pylearn-dev/3QbKtCumAW4 (for Adadelta)
+    """
+    updates         = OrderedDict({})
+    exp_sqr_grads   = OrderedDict({})
+    exp_sqr_ups     = OrderedDict({})
+    gparams         = []
+    for param in params:
+        empty                = np.zeros_like(param.get_value())
+        exp_sqr_grads[param] = theano.shared(value  =   as_floatX(empty),name   ="exp_grad_%s" % param.name)
+        gp                   = T.grad(cost, param)
+        exp_sqr_ups[param]   = theano.shared(value  =   as_floatX(empty),name   ="exp_grad_%s" % param.name)
+        gparams.append(gp)
+    for param, gp in zip(params, gparams):
+        exp_sg      = exp_sqr_grads[param]
+        exp_su      = exp_sqr_ups[param]
+        up_exp_sg   = rho * exp_sg + (1 - rho) * T.sqr(gp)
+        updates[exp_sg]  = up_exp_sg
+        step             =  -(T.sqrt(exp_su + epsilon) / T.sqrt(up_exp_sg + epsilon)) * gp
+        updates[exp_su]  = rho * exp_su + (1 - rho) * T.sqr(step)
+        stepped_param    = param + step
+        
+        if (param.get_value(borrow=True).ndim == 2) and (param.name!='Words'):
+            col_norms       = T.sqrt(T.sum(T.sqr(stepped_param), axis=0))
+            desired_norms   = T.clip(col_norms, 0, T.sqrt(norm_lim))
+            scale           = desired_norms / (1e-7 + col_norms)
+            updates[param]  = stepped_param * scale
+        else:
+            updates[param]  = stepped_param      
+    return updates 
 def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     """
     construct the model 
@@ -178,10 +210,10 @@ def train(batch_size =50,learning_rate = 0.1,epochs = 25):
                                     )
     cost = classifier.negative_log_likelihood(y) 
     grads = T.grad(cost = cost,wrt = params )
-    grad_updates = [ 
-                        (param,param - learning_rate * grad) for param,grad in zip(params,grads) 
-                   ]
-    
+    # grad_updates = [ 
+    #                     (param,param - learning_rate * grad) for param,grad in zip(params,grads) 
+    #                ]
+    grad_updates = sgd_updates_adadelta(cost = cost,params = params)
     train_model = theano.function(
         [index], 
         [cost,classifier.errors(y)],
