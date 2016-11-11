@@ -2,7 +2,8 @@
 import numpy,theano
 import theano.tensor as T
 from theano.tensor.signal import pool
-from theano.tensor.nnet   import conv2d
+from theano.tensor.nnet   import conv
+# from theano.tensor.nnet   import conv2d  新版接口并不好用，这个比上面那个慢了一倍的时间
 from theano.tensor.shared_randomstreams import RandomStreams
 
 rng = numpy.random.RandomState(1234)
@@ -101,8 +102,8 @@ class Conv_Pool_layer(object):
         #              input width                          filter width
         assert input_shape[1] == filter_shape[1]
         
-        n_in  = numpy.prod(input_shape[1:])
-        n_out = numpy.prod(filter_shape[2:]) * filter_shape[0] 
+        n_in  = numpy.prod(filter_shape[1:])
+        n_out = numpy.prod(filter_shape[2:]) * filter_shape[0] / numpy.prod(pool_shape)
    
         W_value = numpy.asarray(
             rng.uniform(
@@ -124,11 +125,12 @@ class Conv_Pool_layer(object):
             self.W = W
             self.b = b 
 
-        conv_out = conv2d(
+        conv_out = conv.conv2d(
                             input        = input,
                             filters      = self.W,
-                            input_shape  = input_shape,
-                            filter_shape = filter_shape
+                            image_shape  = input_shape,
+                            filter_shape = filter_shape,
+                            subsample    = (1,1)
                           )
         # input shape a tuple of constant int values
         # return : 4Dtensor 

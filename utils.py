@@ -40,8 +40,7 @@ def build_data_cv(data_folder, cv=10, clean_string=True):
     # 存储每个word出现的次数
     with open(pos_file, "rb") as f:
         for line in f:       
-            sentence = line[:-1].strip()
-            # 去除'\n'
+            sentence = line[:].strip()
             if clean_string:
                 orig_rev = clean_en_str(sentence)
             else:
@@ -60,8 +59,7 @@ def build_data_cv(data_folder, cv=10, clean_string=True):
     
     with open(neg_file, "rb") as f:
         for line in f:       
-            sentence = line[:-1].strip()
-            # 去除'\n'
+            sentence = line[:].strip()
             if clean_string:
                 orig_rev = clean_en_str(sentence)
             else:
@@ -171,3 +169,18 @@ def get_idx_from_sent(sent, word_idx_map, input_h=56,pad_h=5):
         x.append(0)
         #在句子最后pad zero
     return x
+def make_idx_data_cv(sentences, word_idx_map, cv, max_l=56, filter_h=5):
+    """
+    Transforms sentences into a 2-d matrix.
+    """
+    train, test = [], []
+    for rev in sentences:
+        sent = get_idx_from_sent(rev["text"], word_idx_map, max_l, filter_h) 
+        sent.append(rev["y"])
+        if rev["split"] == cv:      
+            test.append(sent)        
+        else:  
+            train.append(sent)   
+    train = np.asarray(train,dtype="int")
+    test  = np.asarray(test,dtype="int")
+    return [train, test]     

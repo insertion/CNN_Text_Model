@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 from net_layers import *
-from utils import get_idx_from_sent
+from utils import get_idx_from_sent,make_idx_data_cv
 import cPickle,time,sys
+from collections import  OrderedDict
 
 theano_rng = RandomStreams(rng.randint(2 ** 30))
 #  in Theano you first express everything symbolically and afterwards compile this expression to get functions
@@ -16,7 +17,13 @@ def dropout(input,dropout_rate):
                                 dtype = theano.config.floatX
                            )
     return corrupted_matrix*input
+def as_floatX(variable):
+    if isinstance(variable, float):
+        return numpy.cast[theano.config.floatX](variable)
 
+    if isinstance(variable, numpy.ndarray):
+        return numpy.cast[theano.config.floatX](variable)
+    return theano.tensor.cast(variable, theano.config.floatX)    
 def sgd_updates_adadelta(params,cost,rho=0.95,epsilon=1e-6,norm_lim=9):
     """
     adadelta update rule, mostly from
@@ -27,7 +34,7 @@ def sgd_updates_adadelta(params,cost,rho=0.95,epsilon=1e-6,norm_lim=9):
     exp_sqr_ups     = OrderedDict({})
     gparams         = []
     for param in params:
-        empty                = np.zeros_like(param.get_value())
+        empty                = numpy.zeros_like(param.get_value())
         exp_sqr_grads[param] = theano.shared(value  =   as_floatX(empty),name   ="exp_grad_%s" % param.name)
         gp                   = T.grad(cost, param)
         exp_sqr_ups[param]   = theano.shared(value  =   as_floatX(empty),name   ="exp_grad_%s" % param.name)
@@ -55,23 +62,28 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     return params and top_layer
     """
     input_maps    = 1
-    filter_maps   = 100
-    filter_w      = input_w
+    filter_maps   = int(sys.argv[1])
+    top_n_in      = int(sys.argv[2])
+    #filter_w      = input_w
 
     filter_shapes = []
     pool_sizes    = []
+    layer1_n_in   = 0
 
     for filter_h in filter_hs:
+        filter_w   = input_w #filter_h*3
+        layer1_n_in += filter_maps*((input_w - filter_w)/filter_w + 1)
+        #   (W−F+2P)/S+1
         shape = (
                     filter_maps,
                     input_maps,
                     filter_h,
-                    filter_w
+                    filter_w 
                 )
         filter_shapes.append(shape)
         pool_size = (
                     input_h - filter_h + 1,
-                    1  
+                    1 # filter_w 
                     )
         pool_sizes.append(pool_size)
 
@@ -84,7 +96,7 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
                                         input_shape  = (batch_size,input_maps,input_h,input_w),
                                         filter_shape = filter_shapes[i],
                                         pool_shape   = pool_sizes[i],
-                                        #activation   = ReLU
+                                        activation   = ReLU
                                         )                  
         layer0_output = conv_layer.output.flatten(2)
         conv_layers.append(conv_layer)
@@ -95,14 +107,14 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     Drop_layer1_input = dropout(layer1_input,0.5)                                               ##
     Drop_hidden_layer =  Hidden_Layer(                                                          ##
                                     input      = Drop_layer1_input,                             ##
-                                    n_in       = filter_maps * len(filter_hs),                  ##
-                                    n_out      = 50,                                            ##
-                                    #activation = ReLU                                          ##
+                                    n_in       = layer1_n_in,                                   ##
+                                    n_out      = top_n_in,                                            ##
+                                    activation = ReLU                                           ##
                                 )                                                               ##
                                                                                                 ##
     Drop_top_layer   =  Top_Layer(                                                              ##
                                 input = Drop_hidden_layer.output,                               ##
-                                n_in  = 50,                                                     ##
+                                n_in  = top_n_in,                                                     ##
                                 n_out = 2                                                       ##
                             )                                                                   ##
                                                                                                 ##
@@ -111,22 +123,22 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     # reuse paramters in the dropout output.scale the weight matrix W with (1-p)
     hidden_layer        =  Hidden_Layer(
                                     input      = layer1_input,
-                                    n_in       = filter_maps * len(filter_hs),
-                                    n_out      = 50,
+                                    n_in       = layer1_n_in,
+                                    n_out      = top_n_in,
                                     W          = Drop_hidden_layer.W * 0.5,
-                                    b          = Drop_hidden_layer.b
-                                    #activation = ReLU
+                                    b          = Drop_hidden_layer.b,
+                                    activation = ReLU
                                 )  
     top_layer   =  Top_Layer(
                                 input = hidden_layer.output,
-                                n_in  = 50,
+                                n_in  = top_n_in,
                                 n_out = 2,
                                 W     = Drop_top_layer.W * 0.5,
                                 b     = Drop_top_layer.b
                             )  
 
 
-    params = Drop_hidden_layer.params + Drop_top_layer.params
+    params =  Drop_top_layer.params + Drop_hidden_layer.params
     for conv_layer in conv_layers:
         params += conv_layer.params
 
@@ -135,25 +147,27 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
 def load_data(batch_size =50):
     print "loading data ..."
     sentences, vectors,rand_vectors, word_idx_map, _ = cPickle.load(open('dataset.pkl','rb'))
-    if len(sys.argv) <= 1:
-        print "usage: please select the mode between '-rand' and '-word2vec' "
-        mode = '-word2vec'
-    else:    
-        mode= sys.argv[1]
-    if mode == '-rand':
-        print "using the rand vectors"
-        U  = rand_vectors 
-    else:
-        print "using word2vec vectors"
-        U  = vectors
-    dataset = []
-    for sentence in sentences:
-        sent_Byindex = get_idx_from_sent(sentence["text"],word_idx_map)
-        # get_idx_from_sent 还有三个参数，input_h input_w
-        sent_Byindex.append(sentence['y'])
-        dataset.append(sent_Byindex)
+    # if len(sys.argv) <= 1:
+    #     print "usage: please select the mode between '-rand' and '-word2vec' "
+    #     mode = '-word2vec'
+    # else:    
+    #     mode= sys.argv[1]
+    # if mode == '-rand':
+    #     print "using the rand vectors"
+    #     U  = rand_vectors 
+    # else:
+    #     print "using word2vec vectors"
+    U  = vectors
     
-    dataset = numpy.asarray(dataset,dtype ='int32')
+    dataset,testset = make_idx_data_cv(sentences, word_idx_map, cv = 0)
+    # dataset = []
+    # for sentence in sentences:
+    #     sent_Byindex = get_idx_from_sent(sentence["text"],word_idx_map)
+    #     # get_idx_from_sent 还有三个参数，input_h input_w
+    #     sent_Byindex.append(sentence['y'])
+    #     dataset.append(sent_Byindex)
+    
+    # dataset = numpy.asarray(dataset,dtype ='int32')
 
     if dataset.shape[0] % batch_size > 0:
         add_data_num = batch_size  - dataset.shape[0] % batch_size
@@ -178,7 +192,7 @@ def load_data(batch_size =50):
 
     return train_x,train_y,valid_x,valid_y,U,n_train_batches,n_valid_batches,input_h,input_w
 
-def train(batch_size =50,learning_rate = 0.1,epochs = 25):
+def train(batch_size =50,learning_rate = 0.1,epochs = 100):
     
     (
         train_x,
@@ -210,10 +224,10 @@ def train(batch_size =50,learning_rate = 0.1,epochs = 25):
                                     )
     cost = classifier.negative_log_likelihood(y) 
     grads = T.grad(cost = cost,wrt = params )
-    # grad_updates = [ 
-    #                     (param,param - learning_rate * grad) for param,grad in zip(params,grads) 
-    #                ]
-    grad_updates = sgd_updates_adadelta(cost = cost,params = params)
+    grad_updates = [ 
+                        (param,param - learning_rate * grad) for param,grad in zip(params,grads) 
+                   ]
+    # grad_updates = sgd_updates_adadelta(cost = cost,params = params)
     train_model = theano.function(
         [index], 
         [cost,classifier.errors(y)],
@@ -240,6 +254,7 @@ def train(batch_size =50,learning_rate = 0.1,epochs = 25):
     #############
     # Training #
     #############
+    print '...training'
     epoch = 0
     while epoch < epochs :
         start_time = time.time()

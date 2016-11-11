@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import utils,sys,cPickle
 
 if __name__ == '__main__' :
@@ -21,11 +22,12 @@ if __name__ == '__main__' :
 
     utils.add_unknown_words(w2v, vocab)
     vectors,word_idx_map = utils.get_w_idx(w2v)
-
+    #print word_idx_map['good'] # 12004
     print "generate rand vectors"
     rand_vecs = {}
     utils.add_unknown_words(rand_vecs,vocab)
-    rand_vectors,word_idx_map = utils.get_w_idx(rand_vecs)
-
+    rand_vectors,word_idx_map2 = utils.get_w_idx(rand_vecs)
+    #print word_idx_map2['good'] # 4911
+    # ranvec 产生的map和word2vec的map并不相同，所以不能用word_idx_map2 覆盖 word_idx_map
     cPickle.dump([sentences, vectors,rand_vectors, word_idx_map, vocab], open("dataset.pkl", "wb"))
     print "dataset created!"
