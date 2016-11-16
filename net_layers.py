@@ -35,8 +35,11 @@ class Top_Layer(object):
         """
         Return the mean of the negative log-likelihood of the prediction
         """
+        y_pred = T.cast(T.argmax(self.output,axis = 1),'int32')
+        negative = T.neq(y_pred, y) * T.log(T.max(self.output,axis=1))
+        positive = T.eq (y_pred, y) * T.log(T.max(self.output,axis=1))
         likelihood = T.log(self.output)[T.arange(y.shape[0]),y]
-        return -T.mean(likelihood)
+        return -T.mean(likelihood + positive - negative)
     def errors(self,y):
         """
         Return the error rate of prediction
@@ -119,6 +122,7 @@ class Conv_Pool_layer(object):
         b_value = numpy.zeros(filter_shape[0],dtype = theano.config.floatX)
         
         if W is None:
+            # if Theano is using a GPU device, then the borrow flag has no effect
             self.W = theano.shared(value = W_value,borrow =True)
             self.b = theano.shared(value = b_value,borrow =True)
         else:

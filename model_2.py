@@ -9,7 +9,7 @@ theano_rng = RandomStreams(rng.randint(2 ** 30))
 # theano_rng 和 rng 的区别是
 # theano_rng 是编译进function的，每次训练都会运行，
 # rng 只运行一次，不会被编译进function
-def dropout(input,dropout_rate)
+def dropout(input,dropout_rate):
     corrupted_matrix = theano_rng.binomial(
                                 size  = input.shape,
                                 n     = 1,
@@ -62,54 +62,55 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     return params and top_layer
     """
     input_maps    = 1
-    filter_maps   = 100
-    filter_w      = input_w
-
+    filter_maps   = 2
+    input_w  = 15
+    filter_w = 15
     filter_shapes = []
     pool_sizes    = []
+    for i in range(len(filter_hs)):
 
-    for filter_h in filter_hs:
-        shape = (
-                    filter_maps,
-                    input_maps,
-                    filter_h,
-                    filter_w
-                )
-        filter_shapes.append(shape)
+        filter_shape = (
+                         filter_maps,
+                         input_maps,
+                         filter_hs[i],
+                         filter_w
+                       )
         pool_size = (
-                    input_h - filter_h + 1,
-                    1  
-                    )
+                        input_h - filter_hs[i] + 1,
+                        1  
+                     )
+        filter_shapes.append(filter_shape)
         pool_sizes.append(pool_size)
 
     conv_layers = []
     layer0_outputs = []
-
-    for i in xrange(len(filter_hs)):
-        conv_layer = Conv_Pool_layer(
-                                        input        = layer0_input,
-                                        input_shape  = (batch_size,input_maps,input_h,input_w),
-                                        filter_shape = filter_shapes[i],
-                                        pool_shape   = pool_sizes[i],
-                                        activation   = ReLU
-                                        )                  
-        layer0_output = conv_layer.output.flatten(2)
-        conv_layers.append(conv_layer)
-        layer0_outputs.append(layer0_output)
+    for j in range(len(filter_hs)):
+        for i in xrange(20):
+            #循环不能太深，cuda不支持
+            conv_layer = Conv_Pool_layer(
+                                            input        = layer0_input[:,:,:,i*15 : (i+1)*15],
+                                            input_shape  = (batch_size,input_maps,input_h,input_w),
+                                            filter_shape = filter_shapes[j],
+                                            pool_shape   = pool_sizes[j],
+                                            activation   = ReLU
+                                            )                  
+            layer0_output = conv_layer.output.flatten(2)
+            conv_layers.append(conv_layer)
+            layer0_outputs.append(layer0_output)
 
     layer1_input = T.concatenate(layer0_outputs,1)
     #### train ###################################################################################
     Drop_layer1_input = dropout(layer1_input,0.5)                                               ##
     Drop_hidden_layer =  Hidden_Layer(                                                          ##
                                     input      = Drop_layer1_input,                             ##
-                                    n_in       = filter_maps * len(filter_hs),                  ##
-                                    n_out      = 50,                                            ##
+                                    n_in       = filter_maps*20*3,                              ##
+                                    n_out      = 10,                                            ##
                                     activation = ReLU                                           ##
                                 )                                                               ##
                                                                                                 ##
     Drop_top_layer   =  Top_Layer(                                                              ##
                                 input = Drop_hidden_layer.output,                               ##
-                                n_in  = 50,                                                     ##
+                                n_in  = 10,                                                     ##
                                 n_out = 2                                                       ##
                             )                                                                   ##
                                                                                                 ##
@@ -118,15 +119,15 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     # reuse paramters in the dropout output.scale the weight matrix W with (1-p)
     hidden_layer        =  Hidden_Layer(
                                     input      = layer1_input,
-                                    n_in       = filter_maps * len(filter_hs),
-                                    n_out      = 50,
+                                    n_in       = filter_maps*20*3,
+                                    n_out      = 10,
                                     W          = Drop_hidden_layer.W * 0.5,
                                     b          = Drop_hidden_layer.b,
                                     activation = ReLU
                                 )  
     top_layer   =  Top_Layer(
                                 input = hidden_layer.output,
-                                n_in  = 50,
+                                n_in  = 10,
                                 n_out = 2,
                                 W     = Drop_top_layer.W * 0.5,
                                 b     = Drop_top_layer.b
@@ -187,7 +188,7 @@ def load_data(batch_size =50):
 
     return train_x,train_y,valid_x,valid_y,U,n_train_batches,n_valid_batches,input_h,input_w
 
-def train(batch_size =50,learning_rate = 0.05,epochs = 25):
+def train(batch_size =200,learning_rate = 0.1,epochs = 200):
     
     (
         train_x,
@@ -217,6 +218,7 @@ def train(batch_size =50,learning_rate = 0.05,epochs = 25):
                                         input_w      = input_w,
                                         batch_size   = batch_size,
                                     )
+    params += [Words]
     cost = classifier.negative_log_likelihood(y) 
     grads = T.grad(cost = cost,wrt = params )
     grad_updates = [ 
@@ -249,21 +251,26 @@ def train(batch_size =50,learning_rate = 0.05,epochs = 25):
     #############
     # Training #
     #############
+    print 'training...'
+    f = open('log/model_out.txt','wb') 
     epoch = 0
     while epoch < epochs :
         start_time = time.time()
         epoch = epoch + 1
         train_losses = []
-        # random shuffle (洗牌) the sample 
+        # random shuffle (洗牌) the sample ，SGD
         for minibatch_index in rng.permutation(range(n_train_batches)):
             cost_index,train_errors = train_model(index_real_name = minibatch_index) 
             train_losses.append(train_errors) 
         val_losses = [val_model(i) for i in xrange(n_valid_batches)]
         
         val_perf   = 1- numpy.mean(val_losses)
-        train_perf = 1- numpy.mean(train_losses)   
-        print 'epoch: %2i, training time: %.2f secs, val perf: %.2f %%, train perf: %.2f %%, cost: %.2f %%' % (epoch, time.time()-start_time, val_perf*100, train_perf*100, cost_index*100) 
-
+        train_perf = 1- numpy.mean(train_losses)
+        if train_perf > 0.98:
+            break 
+        f.write('%3i,%.2f,%.2f,%.2f\n' % (epoch,val_perf*100, train_perf*100, cost_index*100)) 
+        print 'epoch: %3i, training time: %.2f, val perf: %.2f%%, train perf: %.2f%%, cost: %.2f%%' % (epoch, time.time()-start_time, val_perf*100, train_perf*100, cost_index*100) 
+    f.close()
 
 if __name__ == "__main__":
     train()
