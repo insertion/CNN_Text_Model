@@ -92,7 +92,7 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
                                         input_shape  = (batch_size,input_maps,input_h,input_w),
                                         filter_shape = filter_shapes[i],
                                         pool_shape   = pool_sizes[i],
-                                        activation   = T.nnet.sigmoid
+                                        activation   = ReLU
                                         )                  
         layer0_output = conv_layer.output.flatten(2)
         conv_layers.append(conv_layer)
@@ -108,7 +108,7 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
                                         input_shape  = (batch_size,input_maps,input_h,input_w),
                                         filter_shape = filter_shapes[i],
                                         pool_shape   = pool_sizes[i],
-                                        activation   = T.nnet.sigmoid,
+                                        activation   = ReLU,
                                         W            = conv_layers[i].W,
                                         b            = conv_layers[i].b
                                         )                  
@@ -169,18 +169,18 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
                                 n_in  = 300,                                                   
                                 n_out = 2                                                      
                             )  
-    #############################################################################
-    cost = 0          
-    L = -T.sum(layer1_input * T.log(d_layer1_input) + ( 1 - layer1_input) * T.log( 1 - d_layer1_input) , axis = 1)
+    #############################################################################       
+    #L = -T.sum(layer1_input * T.log(T.nnet.sigmoid(d_layer1_input)) + ( 1 - layer1_input) * T.log( 1 - T.nnet.sigmoid(d_layer1_input)) , axis = 1)
     # # 交叉熵
-    cost = T.mean(L)
-    
+    # cost = T.mean(L)
+    # recon_cost = T.nnet.categorical_crossentropy(d_layer1_input, layer1_input).mean()
+    recon_cost = T.mean(T.sum(d_layer1_input - layer1_input,axis =1))
     params =[]
     for conv_layer in conv_layers:
         params += conv_layer.params
     
     fine_tune_params =  top_layer.params + params
-    return cost, params,top_layer,fine_tune_params
+    return recon_cost, params,top_layer,fine_tune_params
 
 
 def load_data(batch_size =50):
@@ -223,7 +223,7 @@ def load_data(batch_size =50):
 
     return train_x,train_y,valid_x,valid_y,U,n_train_batches,n_valid_batches,input_h,input_w
 
-def train(batch_size =100,learning_rate = 0.1,epochs = 200):
+def train(batch_size =100,learning_rate = 0.1,epochs = 15):
     
     (
         train_x,
@@ -256,7 +256,7 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 200):
     #############                            
     grads = T.grad(cost = cost,wrt = params )
     grad_updates = [ 
-                        (param,param - learning_rate * grad) for param,grad in zip(params,grads) 
+                        (param,param - learning_rate* grad) for param,grad in zip(params,grads) 
                    ]
     
     pre_train_model = theano.function(
@@ -319,7 +319,7 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 200):
     #Training #
     ############
     print 'pre_training...'
-    for i in range(5):
+    for i in range(10):
         for minibatch_index in rng.permutation(range(n_train_batches)):
              cost = pre_train_model(minibatch_index)
         print 'cost:%2f %%'%(cost)
