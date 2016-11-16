@@ -61,7 +61,7 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     construct the model 
     return params and top_layer
     """
-    corrupted_input = dropout(layer0_input,0.5)
+    corrupted_input = dropout(layer0_input,0.6)
     input_maps      = 1
     filter_maps     = 100
     filter_w        = input_w
@@ -92,7 +92,8 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
                                         input_shape  = (batch_size,input_maps,input_h,input_w),
                                         filter_shape = filter_shapes[i],
                                         pool_shape   = pool_sizes[i],
-                                        activation   = ReLU
+                                        activation   = T.nnet.relu
+                                        # 激活函数对模型的性能影响很大,relu比sigmod，softplus，tanh 好太多
                                         )                  
         layer0_output = conv_layer.output.flatten(2)
         conv_layers.append(conv_layer)
@@ -108,7 +109,7 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
                                         input_shape  = (batch_size,input_maps,input_h,input_w),
                                         filter_shape = filter_shapes[i],
                                         pool_shape   = pool_sizes[i],
-                                        activation   = ReLU,
+                                        activation   = T.nnet.relu,
                                         W            = conv_layers[i].W,
                                         b            = conv_layers[i].b
                                         )                  
@@ -118,55 +119,15 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
 
     d_layer1_input = T.concatenate(d_layer0_outputs,1)
 
-#     #############################################################################
-#     conv_layers = []
-#     layer0_outputs = []
-#     for j in range(len(filter_hs)):
-#         for i in xrange(20):
-#             #循环不能太深，cuda不支持wyyyyyy
 
-#             conv_layer = Conv_Pool_layer(
-#                                             input        = layer0_input[:,:,:,i*15 : (i+1)*15],
-#                                             input_shape  = (batch_size,input_maps,input_h,input_w),
-#                                             filter_shape = filter_shapes[j],
-#                                             pool_shape   = pool_sizes[j],
-#                                             activation   = T.nnet.sigmoid,
-#                                             # The underlying code will return an exact 0 or 1 if an element of x is too small or too big
-#                                             # 在配置中设置optimizer_including = local_ultra_fast_sigmoid，这样sigmoid被ultra_fast_sigmoid替换
-#                                             # 后者，最小值为0.0024，最大值为0.9975，不会再出现0和1
-#                                             )                  
-#             layer0_output = conv_layer.output.flatten(2)
-#             conv_layers.append(conv_layer)
-#             layer0_outputs.append(layer0_output)
+    norm_d = T.nnet.softmax(d_layer1_input)
+    norm_o = T.nnet.softmax(layer1_input)
+    recon_cost = -T.nnet.categorical_crossentropy(norm_d, norm_o).mean()
 
-#     output = T.concatenate(layer0_outputs,1)
-   
-#    #############################################################################
-#     drop_conv_layers = []
-#     drop_layer0_outputs = []
-#     for j in range(len(filter_hs)):
-#         for i in xrange(20):
-#             #循环不能太深，cuda不支持
-#             drop_conv_layer = Conv_Pool_layer(
-#                                             input        = corrupted_input[:,:,:,i*15 : (i+1)*15],
-#                                             input_shape  = (batch_size,input_maps,input_h,input_w),
-#                                             filter_shape = filter_shapes[j],
-#                                             pool_shape   = pool_sizes[j],
-#                                             activation   = T.nnet.sigmoid,
-#                                             W            = conv_layers[i].W * 2,
-#                                             b            = conv_layers[i].b
-#                                             )                  
-#             drop_layer0_output = drop_conv_layer.output.flatten(2)
-#             drop_conv_layers.append(drop_conv_layer)
-#             drop_layer0_outputs.append(drop_layer0_output)
 
-#     drop_output = T.concatenate(drop_layer0_outputs,1)
-
-    # drop_output 应该是属于 0-1
-   
     top_layer   =  Top_Layer(                                                              
-                                input = layer1_input,                              
-                                n_in  = 300,                                                   
+                                input = T.concatenate([d_layer1_input,layer1_input],1),                              
+                                n_in  = 600,                                                   
                                 n_out = 2                                                      
                             )  
     #############################################################################       
@@ -174,7 +135,8 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     # # 交叉熵
     # cost = T.mean(L)
     # recon_cost = T.nnet.categorical_crossentropy(d_layer1_input, layer1_input).mean()
-    recon_cost = T.mean(T.sum(d_layer1_input - layer1_input,axis =1))
+   
+
     params =[]
     for conv_layer in conv_layers:
         params += conv_layer.params
@@ -223,7 +185,7 @@ def load_data(batch_size =50):
 
     return train_x,train_y,valid_x,valid_y,U,n_train_batches,n_valid_batches,input_h,input_w
 
-def train(batch_size =100,learning_rate = 0.1,epochs = 15):
+def train(batch_size =100,learning_rate = 0.1,epochs = 100):
     
     (
         train_x,
@@ -256,7 +218,7 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 15):
     #############                            
     grads = T.grad(cost = cost,wrt = params )
     grad_updates = [ 
-                        (param,param - learning_rate* grad) for param,grad in zip(params,grads) 
+                        (param,param - learning_rate * grad) for param,grad in zip(params,grads) 
                    ]
     
     pre_train_model = theano.function(
@@ -285,6 +247,7 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 15):
     # fine_tune #
     #############
     c_cost = classifier.negative_log_likelihood(y) 
+    #c_params += [Words]
     c_grads = T.grad(cost = c_cost,wrt = c_params )
     c_grad_updates = [ 
                         (param,param - learning_rate * grad) for param,grad in zip(c_params,c_grads) 
@@ -318,11 +281,11 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 15):
     ############
     #Training #
     ############
-    print 'pre_training...'
-    for i in range(10):
-        for minibatch_index in rng.permutation(range(n_train_batches)):
-             cost = pre_train_model(minibatch_index)
-        print 'cost:%2f %%'%(cost)
+    # print 'pre_training...'
+    # for i in range(5):
+    #     for minibatch_index in rng.permutation(range(n_train_batches)):
+    #          cost = pre_train_model(minibatch_index)
+    #     print 'cost:%2f %%'%(cost)
 
 
 
@@ -333,14 +296,17 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 15):
         start_time = time.time()
         epoch = epoch + 1
         train_losses = []
+        train_cost = []
         # random shuffle (洗牌) the sample ，SGD
         for minibatch_index in rng.permutation(range(n_train_batches)):
             cost_index,train_errors = fine_tune_model( minibatch_index) 
             train_losses.append(train_errors) 
+            train_cost.append(cost_index)
         val_losses = [val_model(i) for i in xrange(n_valid_batches)]
         
         val_perf   = 1- numpy.mean(val_losses)
         train_perf = 1- numpy.mean(train_losses)
+        cost_index = numpy.mean(train_cost)
         if train_perf > 0.98:
             break 
         f.write('%3i,%.2f,%.2f,%.2f\n' % (epoch,val_perf*100, train_perf*100, cost_index*100)) 

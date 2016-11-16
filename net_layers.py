@@ -36,10 +36,10 @@ class Top_Layer(object):
         Return the mean of the negative log-likelihood of the prediction
         """
         y_pred = T.cast(T.argmax(self.output,axis = 1),'int32')
-        negative = T.neq(y_pred, y) * T.log(T.max(self.output,axis=1))
-        positive = T.eq (y_pred, y) * T.log(T.max(self.output,axis=1))
+        #negative = T.eq(y_pred, y) * T.log(T.max(self.output,axis=1))
+        positive = T.neq (y_pred, y) * T.log(T.min(self.output,axis=1))
         likelihood = T.log(self.output)[T.arange(y.shape[0]),y]
-        return -T.mean(likelihood + positive - negative)
+        return -T.mean(likelihood + positive)
     def errors(self,y):
         """
         Return the error rate of prediction
