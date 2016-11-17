@@ -127,7 +127,8 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     recon_cost = -T.nnet.categorical_crossentropy(norm_d, norm_o).mean()
 
     top_layer_input = layer1_input 
-    top_layer_input -= T.mean(top_layer_input, axis = 0) # zero-center 可以减少模型抖动
+    top_layer_input -= T.mean(top_layer_input, axis = 0)  # zero-center 可以减少模型抖动
+    d_layer1_input  -= T.mean(d_layer1_input,axis = 0)
     #top_layer_input /= T.std(top_layer_input, axis = 0)  # normalize
     '''
     It only makes sense to apply this pre-processing if you have a reason to believe that different
@@ -137,8 +138,8 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     '''
     
     top_layer   =  Top_Layer(                                                              
-                                input = top_layer_input,#T.concatenate([d_layer1_input,layer1_input],1),                              
-                                n_in  = 300,                                                   
+                                input = T.concatenate([d_layer1_input,top_layer_input],1),                              
+                                n_in  = 600,                                                   
                                 n_out = 2                                                      
                             )  
     #############################################################################       
@@ -147,13 +148,15 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     # cost = T.mean(L)
     # recon_cost = T.nnet.categorical_crossentropy(d_layer1_input, layer1_input).mean()
    
-
+    # L2 = (shiddenLayer.W **2).sum() + (topLayer.W **2).sum()
+    L2 = T.sum(T.sqr(top_layer.W))
     params =[]
     for conv_layer in conv_layers:
         params += conv_layer.params
+        L2     += (conv_layer.W **2).sum()
     
     fine_tune_params =  top_layer.params + params
-    return recon_cost, params,top_layer,fine_tune_params
+    return recon_cost, params,top_layer,fine_tune_params,L2
 
 
 def load_data(batch_size =50):
@@ -217,7 +220,7 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 100):
     Words = theano.shared(value = U, name = "Words")
     layer0_input = Words[x.flatten()].reshape((batch_size,1,input_h,input_w)) 
 
-    cost,params,classifier,c_params = build_model(
+    cost,params,classifier,c_params,L2 = build_model(
                                                 layer0_input = layer0_input,
                                                 input_h      = input_h,
                                                 input_w      = input_w,
@@ -257,7 +260,9 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 100):
     #############
     # fine_tune #
     #############
-    c_cost = classifier.negative_log_likelihood(y) 
+    # self.L2 = (self.hiddenLayer.W **2).sum() + (self.topLayer.W **2).sum()
+    # 正则化效果不显著
+    c_cost = classifier.negative_log_likelihood(y) + L2 *0.0
     #c_params += [Words]
     c_grads = T.grad(cost = c_cost,wrt = c_params )
     c_grad_updates = [ 
