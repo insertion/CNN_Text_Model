@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 # numpy.linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None)
 # x = np.arange(0., 10., 0.2)
 # numpy.arange([start, ]stop, [step, ]dtype=None)
-with open("log\model_out.txt") as f:
+with open("log/autocode.txt") as f:
     epoch = []
     val   = []
     train  = []

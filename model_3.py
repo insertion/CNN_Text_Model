@@ -61,7 +61,9 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     construct the model 
     return params and top_layer
     """
+    layer0_input -= T.mean(layer0_input, axis = 0) # zero-center 可以减少模型抖动,81.5%
     corrupted_input = dropout(layer0_input,0.6)
+    
     input_maps      = 1
     filter_maps     = 100
     filter_w        = input_w
@@ -124,10 +126,19 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     norm_o = T.nnet.softmax(layer1_input)
     recon_cost = -T.nnet.categorical_crossentropy(norm_d, norm_o).mean()
 
-
+    top_layer_input = layer1_input 
+    top_layer_input -= T.mean(top_layer_input, axis = 0) # zero-center 可以减少模型抖动
+    #top_layer_input /= T.std(top_layer_input, axis = 0)  # normalize
+    '''
+    It only makes sense to apply this pre-processing if you have a reason to believe that different
+    input features have different scales (or units), but they should be of approximately equal importance to the learning algorithm. 
+    In case of images, the relative scales of pixels are already approximately equal (and in range from 0 to 255), 
+    so it is not strictly necessary to perform this additional pre-processing step.
+    '''
+    
     top_layer   =  Top_Layer(                                                              
-                                input = T.concatenate([d_layer1_input,layer1_input],1),                              
-                                n_in  = 600,                                                   
+                                input = top_layer_input,#T.concatenate([d_layer1_input,layer1_input],1),                              
+                                n_in  = 300,                                                   
                                 n_out = 2                                                      
                             )  
     #############################################################################       
@@ -307,7 +318,7 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 100):
         val_perf   = 1- numpy.mean(val_losses)
         train_perf = 1- numpy.mean(train_losses)
         cost_index = numpy.mean(train_cost)
-        if train_perf > 0.98:
+        if train_perf > 0.98 and epoch >25:
             break 
         f.write('%3i,%.2f,%.2f,%.2f\n' % (epoch,val_perf*100, train_perf*100, cost_index*100)) 
         print 'epoch: %3i, training time: %.2f, val perf: %.2f%%, train perf: %.2f%%, cost: %.2f%%' % (epoch, time.time()-start_time, val_perf*100, train_perf*100, cost_index*100) 
