@@ -4,10 +4,10 @@ from utils import get_idx_from_sent,make_idx_data_cv
 import cPickle,time,sys
 from collections import  OrderedDict
 import theano.tensor.nlinalg
+from theano.tensor.signal import pool
 # manually set theano.config.device, theano.config.floatX
 # heano.config.device = 'gpu'
 # theano.config.floatX = 'float32'
-
 theano_rng = RandomStreams(rng.randint(2 ** 30))
 #  in Theano you first express everything symbolically and afterwards compile this expression to get functions
 # theano_rng 和 rng 的区别是
@@ -101,14 +101,14 @@ def sgd_updates_adadelta(params,cost,rho=0.95,epsilon=1e-6,norm_lim=9):
             updates[param]  = stepped_param      
     return updates 
 
-def build_model(learning_rate,y,layer0_input,input_h,input_w,batch_size,filter_hs=[5]):
+def build_model(learning_rate,y,layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     """
     construct the model 
     return params and top_layer
     """
     layer0_input -= T.mean(layer0_input, axis = 0) # zero-center 可以减少模型抖动,81.5%
     input_maps      = 1
-    filter_maps     = 2
+    filter_maps     = 99
     filter_w        = input_w
 
     filter_shapes   = []
@@ -140,12 +140,25 @@ def build_model(learning_rate,y,layer0_input,input_h,input_w,batch_size,filter_h
                                         activation   = T.nnet.relu
                                         # 激活函数对模型的性能影响很大,relu比sigmod，softplus，tanh 好太多
                                         )                  
-        layer0_output = conv_layer.output.flatten(2)
+        layer0_output = conv_layer.output.flatten(2).dimshuffle(0,'x',1)
+        # conlayer.output ==>(batch_size,maps,1,1) 
+        # flatten   ==>(batch_size,maps)
+        # dimshuffle ==>(batch_size,1,maps)
         conv_layers.append(conv_layer)
         layer0_outputs.append(layer0_output)
 
+    # any number of ‘x’ characters in dimensions where this tensor should be broadcasted.  
     layer1_input = T.concatenate(layer0_outputs,1)
-
+    # (batch_size,3,maps)
+    layer1_input = pool.pool_2d(
+                            input = layer1_input,
+                            ds    = (3,3),
+                            ignore_border = True
+                         )
+    # (batch_size,3/3,maps/3)
+    layer1_input = layer1_input.flatten(2)
+    # Max pooling will be done over the 2 last dimensions.
+    # layer1_input = layer1_input.max(1)
     layer1_input -= T.mean(layer1_input, axis = 0)  # zero-center 可以减少模型抖动
     
     # var = T.var(layer1_input,axis = 0).mean() / layer1_input.shape[0]
@@ -171,7 +184,7 @@ def build_model(learning_rate,y,layer0_input,input_h,input_w,batch_size,filter_h
 
     top_layer   =  Top_Layer(                                                              
                                 input = layer1_input,                 
-                                n_in  = 2,                                                   
+                                n_in  = 33,                                                   
                                 n_out = 2                                                      
                             )  
 
