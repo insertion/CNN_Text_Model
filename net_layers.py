@@ -9,9 +9,19 @@ from theano.tensor.shared_randomstreams import RandomStreams
 rng = numpy.random.RandomState(1234)
 
 def ReLU(x):
-    y = T.maximum(0.0,x)
+    y = T.maximum(0.01,x)
     # T.max(x，axis=None),return maximum of x along axis
     # T.maximum(a,b) return max by element of a and b
+    return y
+def Jump(x):
+    y = T.where(T.gt(x,0),1,0)
+    # Comparisons has special method
+    # T.lt(a,b) ==> a < b less than
+    # T.gt(a,b) ==> a > b greater than
+    # T.le(a,b) ==> less and equal
+    # switch alis for where
+    # T.where(condition,x,y)
+    # ==> condition?x:y
     return y
 
 class Top_Layer(object):
@@ -30,16 +40,15 @@ class Top_Layer(object):
             self.b = b
         self.output = T.nnet.softmax(T.dot(input,self.W)+self.b)
         self.params = [self.W,self.b]
+        self.entropy = T.nnet.categorical_crossentropy(self.output,self.output).mean()
 
     def negative_log_likelihood(self,y):
         """
         Return the mean of the negative log-likelihood of the prediction
         """
         y_pred = T.cast(T.argmax(self.output,axis = 1),'int32')
-        #negative = T.eq(y_pred, y) * T.log(T.max(self.output,axis=1))
-        positive = T.neq (y_pred, y) * T.log(T.min(self.output,axis=1))
         likelihood = T.log(self.output)[T.arange(y.shape[0]),y]
-        return -T.mean(likelihood + positive)
+        return -T.mean(likelihood)
     def errors(self,y):
         """
         Return the error rate of prediction

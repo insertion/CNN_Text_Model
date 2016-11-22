@@ -3,12 +3,53 @@ from net_layers import *
 from utils import get_idx_from_sent,make_idx_data_cv
 import cPickle,time,sys
 from collections import  OrderedDict
+import theano.tensor.nlinalg
 
 theano_rng = RandomStreams(rng.randint(2 ** 30))
 #  in Theano you first express everything symbolically and afterwards compile this expression to get functions
 # theano_rng 和 rng 的区别是
 # theano_rng 是编译进function的，每次训练都会运行，
 # rng 只运行一次，不会被编译进function
+def load_data(batch_size =50):
+    print "loading data ..."
+    sentences, vectors,rand_vectors, word_idx_map, _ = cPickle.load(open('dataset.pkl','rb'))
+    if len(sys.argv) <= 1:
+        print "usage: please select the mode between '-rand' and '-word2vec' "
+        mode = '-word2vec'
+    else:    
+        mode= sys.argv[1]
+    if mode == '-rand':
+        print "using the rand vectors"
+        U  = rand_vectors 
+    else:
+        print "using word2vec vectors"
+        U  = vectors
+    
+    dataset,testset = make_idx_data_cv(sentences, word_idx_map, cv = 0)
+
+    if dataset.shape[0] % batch_size > 0:
+        add_data_num = batch_size  - dataset.shape[0] % batch_size
+        extra_data   = rng.permutation(dataset)[:add_data_num]
+        dataset      = numpy.append(dataset,extra_data,axis = 0) 
+    
+    n_batches       = dataset.shape[0] / batch_size
+    n_train_batches = int(numpy.round(n_batches*0.9))
+    n_valid_batches = n_batches - n_train_batches
+
+    dataset         = rng.permutation(dataset)
+    train_set       = dataset[:n_train_batches * batch_size,:]
+    valid_set       = dataset[n_train_batches * batch_size:,:]
+    
+    input_h = train_set.shape[1] -1
+    input_w = U.shape[1]
+
+    train_x = T.cast(theano.shared(train_set[:,:-1],borrow = True),dtype="int32")
+    train_y = T.cast(theano.shared(train_set[:,-1] ,borrow = True),dtype="int32")
+    valid_x = T.cast(theano.shared(valid_set[:,:-1],borrow = True),dtype="int32")
+    valid_y = T.cast(theano.shared(valid_set[:,-1] ,borrow = True),dtype="int32")
+    #print valid_y.type()
+    return train_x,train_y,valid_x,valid_y,U,n_train_batches,n_valid_batches,input_h,input_w
+
 def dropout(input,dropout_rate):
     corrupted_matrix = theano_rng.binomial(
                                 size  = input.shape,
@@ -56,14 +97,13 @@ def sgd_updates_adadelta(params,cost,rho=0.95,epsilon=1e-6,norm_lim=9):
         else:
             updates[param]  = stepped_param      
     return updates 
-def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
+
+def build_model(learning_rate,y,layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
     """
     construct the model 
     return params and top_layer
     """
     layer0_input -= T.mean(layer0_input, axis = 0) # zero-center 可以减少模型抖动,81.5%
-    corrupted_input = dropout(layer0_input,0.6)
-    
     input_maps      = 1
     filter_maps     = 100
     filter_w        = input_w
@@ -102,102 +142,48 @@ def build_model(layer0_input,input_h,input_w,batch_size,filter_hs=[3,4,5]):
         layer0_outputs.append(layer0_output)
 
     layer1_input = T.concatenate(layer0_outputs,1)
-##############################################################################
-    d_conv_layers = []
-    d_layer0_outputs = []
-    for i in xrange(len(filter_hs)):
-        d_conv_layer = Conv_Pool_layer(
-                                        input        = corrupted_input,
-                                        input_shape  = (batch_size,input_maps,input_h,input_w),
-                                        filter_shape = filter_shapes[i],
-                                        pool_shape   = pool_sizes[i],
-                                        activation   = T.nnet.relu,
-                                        W            = conv_layers[i].W,
-                                        b            = conv_layers[i].b
-                                        )                  
-        d_layer0_output = d_conv_layer.output.flatten(2)
-        d_conv_layers.append(d_conv_layer)
-        d_layer0_outputs.append(d_layer0_output)
 
-    d_layer1_input = T.concatenate(d_layer0_outputs,1)
+    layer1_input -= T.mean(layer1_input, axis = 0)  # zero-center 可以减少模型抖动
+    
+    # var = T.var(layer1_input,axis = 0).mean() / layer1_input.shape[0]
+    # cov = T.dot(T.transpose(layer1_input),layer1_input) / layer1_input.shape[0]
+    # var = theano.tensor.nlinalg.trace(cov) 
+    # cov = T.abs_(cov).sum()
+    # U,S,V = theano.tensor.nlinalg.svd(cov)
+    # layer1_input = T.dot(layer1_input,U)
+    # 矩阵相乘，实际上就是空间映射
+    # 这里每个mini-batch 的支持向量不同，PCA没有意义
+    # 即不同数据的pca被映射到不同的维度空间，没有可比性
+    # 对角线上分别是x和y的方差，非对角线上是协方差。
+    # 协方差大于0表示x和y若有一个增，另一个也增；小于0表示一个增，一个减；
+    # 协方差为0时，两者独立。
+    # 协方差绝对值越大，两者对彼此的影响越大，反之越小
+    # hidden_layer = Hidden_Layer(
+    #                                 input = layer1_input,
+    #                                 n_in  = 300,
+    #                                 n_out = 7,
+    #                                 activation = T.nnet.relu
 
+    #                             )
 
-    norm_d = T.nnet.softmax(d_layer1_input)
-    norm_o = T.nnet.softmax(layer1_input)
-    recon_cost = -T.nnet.categorical_crossentropy(norm_d, norm_o).mean()
-
-    top_layer_input = layer1_input 
-    top_layer_input -= T.mean(top_layer_input, axis = 0)  # zero-center 可以减少模型抖动
-    d_layer1_input  -= T.mean(d_layer1_input,axis = 0)
-    #top_layer_input /= T.std(top_layer_input, axis = 0)  # normalize
-    '''
-    It only makes sense to apply this pre-processing if you have a reason to believe that different
-    input features have different scales (or units), but they should be of approximately equal importance to the learning algorithm. 
-    In case of images, the relative scales of pixels are already approximately equal (and in range from 0 to 255), 
-    so it is not strictly necessary to perform this additional pre-processing step.
-    '''
-    # 对特征做一个gibbs采样怎么样
     top_layer   =  Top_Layer(                                                              
-                                input = top_layer_input,#T.concatenate([d_layer1_input,top_layer_input],1),                              
+                                input = layer1_input,                 
                                 n_in  = 300,                                                   
                                 n_out = 2                                                      
                             )  
-    #############################################################################       
-    #L = -T.sum(layer1_input * T.log(T.nnet.sigmoid(d_layer1_input)) + ( 1 - layer1_input) * T.log( 1 - T.nnet.sigmoid(d_layer1_input)) , axis = 1)
-    # # 交叉熵
-    # cost = T.mean(L)
-    # recon_cost = T.nnet.categorical_crossentropy(d_layer1_input, layer1_input).mean()
-   
-    # L2 = (shiddenLayer.W **2).sum() + (topLayer.W **2).sum()
-    L2 = T.sum(T.sqr(top_layer.W))
+
     params =[]
     for conv_layer in conv_layers:
         params += conv_layer.params
-        L2     += (conv_layer.W **2).sum()
     
-    fine_tune_params =  top_layer.params + params
-    return recon_cost, params,top_layer,fine_tune_params,L2
+    params =  top_layer.params + params
 
-
-def load_data(batch_size =50):
-    print "loading data ..."
-    sentences, vectors,rand_vectors, word_idx_map, _ = cPickle.load(open('dataset.pkl','rb'))
-    if len(sys.argv) <= 1:
-        print "usage: please select the mode between '-rand' and '-word2vec' "
-        mode = '-word2vec'
-    else:    
-        mode= sys.argv[1]
-    if mode == '-rand':
-        print "using the rand vectors"
-        U  = rand_vectors 
-    else:
-        print "using word2vec vectors"
-        U  = vectors
-    
-    dataset,testset = make_idx_data_cv(sentences, word_idx_map, cv = 0)
-
-    if dataset.shape[0] % batch_size > 0:
-        add_data_num = batch_size  - dataset.shape[0] % batch_size
-        extra_data   = rng.permutation(dataset)[:add_data_num]
-        dataset      = numpy.append(dataset,extra_data,axis = 0) 
-    
-    n_batches       = dataset.shape[0] / batch_size
-    n_train_batches = int(numpy.round(n_batches*0.9))
-    n_valid_batches = n_batches - n_train_batches
-
-    dataset         = rng.permutation(dataset)
-    train_set       = dataset[:n_train_batches * batch_size,:]
-    valid_set       = dataset[n_train_batches * batch_size:,:]
-    
-    input_h = train_set.shape[1] -1
-    input_w = U.shape[1]
-
-    train_x = T.cast(theano.shared(train_set[:,:-1],borrow = True),dtype="int32")
-    train_y = T.cast(theano.shared(train_set[:,-1] ,borrow = True),dtype="int32")
-    valid_x = T.cast(theano.shared(valid_set[:,:-1],borrow = True),dtype="int32")
-    valid_y = T.cast(theano.shared(valid_set[:,-1] ,borrow = True),dtype="int32")
-
-    return train_x,train_y,valid_x,valid_y,U,n_train_batches,n_valid_batches,input_h,input_w
+    c_cost = top_layer.negative_log_likelihood(y) #+ (cov - var) / var * 0.1
+    c_grads = T.grad(cost = c_cost,wrt = params)
+    c_grad_updates = [ 
+                        (param,param - learning_rate * grad) for param,grad in zip(params,c_grads) 
+                   ]
+    return c_cost,c_grad_updates,top_layer,layer1_input
 
 def train(batch_size =100,learning_rate = 0.1,epochs = 100):
     
@@ -220,57 +206,68 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 100):
     Words = theano.shared(value = U, name = "Words")
     layer0_input = Words[x.flatten()].reshape((batch_size,1,input_h,input_w)) 
 
-    cost,params,classifier,c_params,L2 = build_model(
+    c_cost,c_grad_updates,classifier,hiddenLayer_outputs = build_model(
+                                                learning_rate= learning_rate,
+                                                y            = y,
                                                 layer0_input = layer0_input,
                                                 input_h      = input_h,
                                                 input_w      = input_w,
                                                 batch_size   = batch_size,
                                               )
-
-    #############
-    # pre_train #
-    #############                            
-    grads = T.grad(cost = cost,wrt = params )
-    grad_updates = [ 
-                        (param,param - learning_rate * grad) for param,grad in zip(params,grads) 
-                   ]
+    # hiddenLayer_output 100*300
     
-    pre_train_model = theano.function(
-        [index], 
-        cost,
-        updates = grad_updates,
-        givens={
-                x: train_x[index * batch_size : (index + 1) * batch_size]
-                },
-        allow_input_downcast = True,
-        on_unused_input='warn'
-        )
-
-    # val_model = theano.function(
-    #     [index], 
-    #     cost,
-    #     givens={
-    #         x: valid_x[index * batch_size: (index + 1) * batch_size]
-    #         },
-    #     allow_input_downcast=True,
-    #     on_unused_input='warn'
-    #     )
-    
-
     #############
     # fine_tune #
     #############
-    # self.L2 = (self.hiddenLayer.W **2).sum() + (self.topLayer.W **2).sum()
-    # 正则化效果不显著
-    c_cost = classifier.negative_log_likelihood(y) + L2 *0.0
-    #c_params += [Words]
-    c_grads = T.grad(cost = c_cost,wrt = c_params )
-    c_grad_updates = [ 
-                        (param,param - learning_rate * grad) for param,grad in zip(c_params,c_grads) 
-                   ]
+    #for hiddenLayer_output in hiddenLayer_outputs:
+    
+    # [1,300] row 和vector 有没有区别
+    # vector: Return a Variable for a 1-dimensional ndarray
+    # row   : Return a Variable for a 2-dimensional ndarray in which the number of rows is guaranteed to be 1.
+
+    # cov = T.dot(T.transpose(hiddenLayer_outputs),hiddenLayer_outputs) /hiddenLayer_outputs.shape[0]
+    # U,S,V = theano.tensor.nlinalg.svd(cov)
+    # hiddenLayer_outputs = T.dot(hiddenLayer_outputs,U)
+    
+    # cov = T.dot(T.transpose(hiddenLayer_outputs),hiddenLayer_outputs) / hiddenLayer_outputs.shape[0]
+    # cov = T.abs_(cov).mean()
+    
+    positive_num = T.sum(y)
+    positive = T.transpose(hiddenLayer_outputs) * y
+    positive = T.sum(T.transpose(positive),axis = 0) / positive_num
+
+    negative_num = T.sum(1-y)
+    negative = T.transpose(hiddenLayer_outputs) * (1-y)
+    negative = T.sum(T.transpose(negative),axis = 0) / negative_num
+
+    bais     = T.abs_(positive - negative)
+    bais     = T.nnet.softmax(bais)
+    positive = T.nnet.softmax(positive)
+    negative = T.nnet.softmax(negative)
+
+    mycrossentry  = -T.sum(positive*T.log(negative) + (1-positive) * T.log(1-negative))
+    crossentropy0 = T.nnet.binary_crossentropy(positive, negative).sum()
+    crossentropy1 = T.nnet.binary_crossentropy(negative, positive).sum()
+
+    entropy0      = T.nnet.binary_crossentropy(positive,positive).sum()
+    entropy1      = T.nnet.binary_crossentropy(negative,negative).sum()
+    entropy       = T.nnet.binary_crossentropy(bais,bais).sum()
+    kl            = crossentropy0 + crossentropy1 - entropy0 - entropy1
+    # 熵表示数据分布的不确定性，熵越小表示分布越不均匀，熵也可以表示编码长度，熵越小表示编码长度越小，所载的信息越少
+    # 熵也可以描述各个神经元的差异性
+    # 交叉熵表示，用一种分布来表示另一种分布所需要的编码长度的期望
+    # 相对熵，真实编码长度 - 非真实编码长度
+
+    # // 结果取整 ==> %
+    # / 正常除法
+    # 按理说这里应该不能broadcast的,必须具有相同的列数
+    # Input dimension mis-match. (input[0].shape[1] = 300, input[1].shape[1] = 100)
+    # 只有作为结果输出时才会报错，应该是再计算节点中时才会报错
+    # 如何不在计算节点中出现，只会检查语法错误，不会报运行时错误
+    
     fine_tune_model = theano.function(
                         [index], 
-                        [c_cost,classifier.errors(y)],
+                        [c_cost,classifier.errors(y),kl],
                         updates = c_grad_updates,
                         givens={
                                 x: train_x[index * batch_size : (index + 1) * batch_size],
@@ -282,7 +279,7 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 100):
 
     val_model = theano.function(
         [index], 
-        classifier.errors(y),
+        [classifier.errors(y),kl],
         givens={
             x: valid_x[index * batch_size: (index + 1) * batch_size],
             y: valid_y[index * batch_size: (index + 1) * batch_size]
@@ -290,21 +287,31 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 100):
         allow_input_downcast=True,
         on_unused_input='warn'
         )
+    
+    debug_model = theano.function(
+        [index], 
+        [kl],
+        givens={
+            x: train_x[index * batch_size: (index + 1) * batch_size],
+            y: train_y[index * batch_size: (index + 1) * batch_size]
+            },
+        allow_input_downcast=True,
+        on_unused_input='warn'
+        )
 
 
-
+    ############
+    #  DEBUG  #
+    ############
+    # for i in range(1):
+    #     outs= debug_model(2)
+    #     for out in outs:
+    #         print out
 
     ############
     #Training #
     ############
-    # print 'pre_training...'
-    # for i in range(5):
-    #     for minibatch_index in rng.permutation(range(n_train_batches)):
-    #          cost = pre_train_model(minibatch_index)
-    #     print 'cost:%2f %%'%(cost)
-
-
-
+  
     print 'fine_tune...'
     f = open('log/autocode.txt','wb') 
     epoch = 0
@@ -313,20 +320,29 @@ def train(batch_size =100,learning_rate = 0.1,epochs = 100):
         epoch = epoch + 1
         train_losses = []
         train_cost = []
+        kls =[]
+        vkls = []
+        val_losses =[]
         # random shuffle (洗牌) the sample ，SGD
         for minibatch_index in rng.permutation(range(n_train_batches)):
-            cost_index,train_errors = fine_tune_model( minibatch_index) 
+            cost_index,train_errors,kl = fine_tune_model( minibatch_index) 
             train_losses.append(train_errors) 
             train_cost.append(cost_index)
-        val_losses = [val_model(i) for i in xrange(n_valid_batches)]
+            kls.append(kl)
+        for i in xrange(n_valid_batches):
+            val_loss,vkl = val_model(i)
+            val_losses.append(val_loss)
+            vkls.append(vkl)
         
         val_perf   = 1- numpy.mean(val_losses)
         train_perf = 1- numpy.mean(train_losses)
         cost_index = numpy.mean(train_cost)
+        kl         = numpy.mean(kls)
+        vkl        = numpy.mean(vkls)
         if train_perf > 0.98 and epoch >25:
             break 
         f.write('%3i,%.2f,%.2f,%.2f\n' % (epoch,val_perf*100, train_perf*100, cost_index*100)) 
-        print 'epoch: %3i, training time: %.2f, val perf: %.2f%%, train perf: %.2f%%, cost: %.2f%%' % (epoch, time.time()-start_time, val_perf*100, train_perf*100, cost_index*100) 
+        print 'epoch: %3i, training time: %.2f, val perf: %.2f%%, train perf: %.2f%%, cost: %.2f%%, kl: %f, vkl:%f' % (epoch, time.time()-start_time, val_perf*100, train_perf*100, cost_index*100,kl*100,vkl*100) 
     f.close()
             
    
