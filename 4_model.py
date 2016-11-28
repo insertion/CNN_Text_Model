@@ -108,7 +108,7 @@ def build_model(learning_rate,y,layer0_input,input_h,input_w,batch_size,filter_h
     """
     layer0_input -= T.mean(layer0_input, axis = 0) # zero-center 可以减少模型抖动,81.5%
     input_maps      = 1
-    filter_maps     = 99
+    filter_maps     = 100
     filter_w        = input_w
 
     filter_shapes   = []
@@ -152,10 +152,10 @@ def build_model(learning_rate,y,layer0_input,input_h,input_w,batch_size,filter_h
     # (batch_size,3,maps)
     layer1_input = pool.pool_2d(
                             input = layer1_input,
-                            ds    = (3,3),
+                            ds    = (3,1),
                             ignore_border = True
                          )
-    # (batch_size,3/3,maps/3)
+    # (batch_size,3/3,maps)
     layer1_input = layer1_input.flatten(2)
     # Max pooling will be done over the 2 last dimensions.
     # layer1_input = layer1_input.max(1)
@@ -184,7 +184,7 @@ def build_model(learning_rate,y,layer0_input,input_h,input_w,batch_size,filter_h
 
     top_layer   =  Top_Layer(                                                              
                                 input = layer1_input,                 
-                                n_in  = 33,                                                   
+                                n_in  = 100,                                                   
                                 n_out = 2                                                      
                             )  
 

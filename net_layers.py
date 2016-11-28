@@ -161,6 +161,157 @@ class Conv_Pool_layer(object):
         self.output = activation(pool_out + self.b.dimshuffle('x',0,'x','x'))
         self.params = [self.W,self.b]
 
-                              
-                
-                            
+class RNN_layer(object):
+
+    def __init__(self,input,n_in,n_out,batch_size,W=None,b=None,V=None,activation=T.tanh):
+        # input.shape
+        #               words_num
+        #               batchsize
+        #               dimension /n_in
+        self.activation = activation
+        W_value = numpy.asarray(
+            rng.uniform(
+                low   = -numpy.sqrt(6.0 / (n_in + n_out)),
+                high  =  numpy.sqrt(6.0 / (n_in + n_out)),
+                size  =  (n_in,n_out)
+            ),
+            dtype = theano.config.floatX
+            # shared vaiable need to define the dtype
+        )
+        
+        V_value = numpy.asarray(
+            rng.uniform(
+                low   = -numpy.sqrt(6.0 / (n_out + n_out)),
+                high  =  numpy.sqrt(6.0 / (n_out + n_out)),
+                size  =  (n_out,n_out)
+            ),
+            dtype = theano.config.floatX
+            # shared vaiable need to define the dtype
+        )
+
+        b_value = numpy.zeros(n_out,dtype = theano.config.floatX)
+        self.s0 = theano.shared(numpy.zeros((batch_size,n_out), dtype=theano.config.floatX))
+        
+        if W is None:
+            # if Theano is using a GPU device, then the borrow flag has no effect
+            self.W = theano.shared(value = W_value,borrow =True)
+            self.b = theano.shared(value = b_value,borrow =True)
+            self.V = theano.shared(value = V_value,borrow =True)
+        else:
+            self.W = W
+            self.V = V
+            self.b = b 
+        # implement the forward propagation 
+        # we use scan 
+        def recurrence(x_t, s_t):
+            h_t = self.activation(T.dot(x_t, self.W) + T.dot(s_t, self.V) + self.b)
+            # s_t save last output
+            return h_t
+        # (batchsize,dimension)
+        # n_steps = sentence_size
+        output,_ = theano.scan(
+                            fn           = recurrence, 
+                            sequences    = input, 
+                            outputs_info = self.s0, 
+                            n_steps      = input.shape[0]
+                            )
+        # output.shape (words_num,batchsize,n_out)
+        # scan can iterate over the leading dimension of sequences (similar to Python’s for x in a_list).
+        # n_steps is not provided, scan will figure out the amount of steps it should run given its input sequences.
+        self.output = output
+        self.params = [self.W,self.V,self.b]
+        
+
+class Conv_RNN_Pool_layer(object):
+    
+    """
+    the composition of convolution ,recurrent and max-pooling layer
+    """
+    def __init__(self,input,input_shape,filter_shape,pool_shape,rnn_out,W=None,b=None,activation = T.tanh):
+    
+        # input_shape:                        filter_shape:  
+        #              batch size,                          filter number,
+        #              input maps,                          input  maps,
+        #              input height,                        filter height, 
+        #              input width                          filter width
+        assert input_shape[1] == filter_shape[1]
+        
+        n_in  = numpy.prod(filter_shape[1:])
+        n_out = numpy.prod(filter_shape[2:]) * filter_shape[0] / numpy.prod(pool_shape)
+   
+        W_value = numpy.asarray(
+            rng.uniform(
+                low   = -numpy.sqrt(6.0 / (n_in + n_out)),
+                high  =  numpy.sqrt(6.0 / (n_in + n_out)),
+                size  =  filter_shape
+            ),
+            dtype = theano.config.floatX
+            # shared vaiable need to define the dtype
+        )
+        # These replicated units share the same parameterization (weight vector and bias)
+        # so b's shape equal to the number of filters
+       
+        
+        if W is None:
+            # if Theano is using a GPU device, then the borrow flag has no effect
+            self.W = theano.shared(value = W_value,borrow =True)
+        else:
+            self.W = W
+
+        conv_out = conv.conv2d(
+                            input        = input,
+                            filters      = self.W,
+                            image_shape  = input_shape,
+                            filter_shape = filter_shape,
+                            subsample    = (1,1)
+                          )
+        # input shape a tuple of constant int values
+        # return : 4Dtensor 
+        #                    batch  size,       ==> 50
+        #                    output channels,   ==> 100
+        #                    output rows,       ==> input_h - filter_h + 1,
+        #                    output columns     ==> 1
+        conv_out = conv_out.dimshuffle(2,3,0,1)
+        # return : 4Dtensor 
+        #                    output rows,       ==> input_h - filter_h + 1,
+        #                    output channels,   ==> 1
+        #                    batch  size,       ==> 50
+        #                    output columns     ==> 100
+        conv_out = conv_out.reshape((pool_shape[0],input_shape[0],filter_shape[0]))
+        # return : 3Dtensor 
+        #                    output rows,       ==> input_h - filter_h + 1,
+        #                    batch  size,       ==> 50
+        #                    output columns     ==> 100
+
+        rnn_layer = RNN_layer(
+                                input         = conv_out,
+                                n_in          = filter_shape[0],
+                                n_out         = rnn_out,
+                                batch_size    = input_shape[0],
+                                # manually set
+                                # activation    = activation
+                             )
+        # return : 3Dtensor 
+        #                    output rows,       ==> input_h - filter_h + 1,
+        #                    batch  size,       ==> 50
+        #                    output columns     ==> 20
+        pool_in = rnn_layer.output.dimshuffle(1,0,2)
+        # return : 3Dtensor 
+        #                    batch  size,       ==> 50
+        #                    output rows,       ==> input_h - filter_h + 1,
+        #                    output columns     ==> 20
+        pool_out=pool.pool_2d(
+                                input         = pool_in,
+                                ds            = pool_shape,
+                                ignore_border = True
+                              )
+        # return : 3Dtensor 
+        #                    batch  size,       ==> 50
+        #                    output rows,       ==> 1,
+        #                    output columns     ==> 20                      
+        
+        b_value = numpy.zeros(rnn_out,dtype = theano.config.floatX)
+        self.b = theano.shared(value = b_value,borrow =True)
+        
+        self.output = activation(pool_out + self.b.dimshuffle('x','x',0))
+        self.params = [self.W,self.b] + rnn_layer.params
